@@ -11,6 +11,5 @@ parser.add_argument('--data', default='data/Human6', help='videos or image files
 parser.add_argument('--mask-dilation', default=32, type=int, help='mask dilation when inpainting')
 args = parser.parse_args()
 
-mask(args)
+# mask(args)
 inpaint(args)
-

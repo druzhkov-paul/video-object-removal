@@ -4,6 +4,7 @@ from torch.utils import data
 from inpainting.davis import DAVIS
 from inpainting.model import generate_model
 from inpainting.utils import *
+from tqdm import tqdm
 
 
 class Object():
@@ -13,11 +14,14 @@ class Object():
 def inpaint(args):
     opt = Object()
     opt.crop_size = 512
+    # opt.crop_size = 256
     opt.double_size = True if opt.crop_size == 512 else False
     ########## DAVIS
+    print('Configuring data loaders...')
     DAVIS_ROOT =os.path.join('results', args.data)
     DTset = DAVIS(DAVIS_ROOT, mask_dilation=args.mask_dilation, size=(opt.crop_size, opt.crop_size))
     DTloader = data.DataLoader(DTset, batch_size=1, shuffle=False, num_workers=1)
+    print('Configuring data loaders...[done]')
 
     opt.search_range = 4  # fixed as 4: search range for flow subnetworks
     opt.pretrain_path = 'cp/save_agg_rec_512.pth'
@@ -62,7 +66,10 @@ def inpaint(args):
         tmp = np.clip(tmp, 0, 1) * 255.
         return tmp.astype(np.uint8)
 
-    model, _ = generate_model(opt)
+    print('Configuring model...')
+    model = generate_model(opt)
+    print('Configuring model...[done]')
+    print(model)
     print('Number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
     model.eval()
@@ -71,7 +78,7 @@ def inpaint(args):
     pre = 15
 
     with torch.no_grad():
-        for seq, (inputs, masks, info) in enumerate(DTloader):
+        for seq, (inputs, masks, info) in tqdm(enumerate(DTloader)):
 
             idx = torch.LongTensor([i for i in range(pre - 1, -1, -1)])
             pre_inputs = inputs[:, :, :pre].index_select(2, idx)
@@ -86,6 +93,7 @@ def inpaint(args):
             save_path = os.path.join(opt.result_path, seq_name)
             if not os.path.exists(save_path) and opt.save_image:
                 os.makedirs(save_path)
+            # print(save_path)
 
             inputs = 2. * inputs - 1
             inverse_masks = 1 - masks
@@ -101,7 +109,7 @@ def inpaint(args):
 
             lstm_state = None
 
-            for t in range(num_frames):
+            for t in tqdm(range(num_frames)):
                 masked_inputs_ = []
                 masks_ = []
 
@@ -151,18 +159,23 @@ def inpaint(args):
                                       dim=1) if t == 0 else torch.cat(
                     [outputs.detach().squeeze(2), prev_ones, prev_ones * prev_mask], dim=1)
 
+                # print('starting inference...')
+                # print(masked_inputs_.shape)
+                # print(masks_.shape)
                 outputs, _, _, _, _ = model(masked_inputs_, masks_, lstm_state, prev_feed, t)
+                # print('get results...')
                 if opt.double_size:
                     prev_mask_ = masks_[:, :, 2] * 0.5  # rec given whtn 512
 
                 lstm_state = None
                 end = time.time() - start
                 if lstm_state is not None:
+                    pritn('repacking hidden state...')
                     lstm_state = repackage_hidden(lstm_state)
 
                 total_time += end
                 if t > pre:
-                    print('{}th frame of {} is being processed'.format(t - pre, seq_name))
+                    # print('{}th frame of {} is being processed'.format(t - pre, seq_name))
                     out_frame = to_img(outputs)
                     out_frame = cv2.resize(out_frame, (DTset.shape[1], DTset.shape[0]))
                     cv2.imshow('Inpainting', out_frame)
@@ -182,4 +195,3 @@ def inpaint(args):
                 createVideoClip(final_clip, video_path, '%s.mp4' % (seq_name), [DTset.shape[0], DTset.shape[1]])
                 print('Predicted video clip saving')
             cv2.destroyAllWindows()
-
